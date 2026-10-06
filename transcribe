@@ -1,0 +1,161 @@
+#!/usr/bin/env python3
+"""Transcribe an audio file locally with faster-whisper.
+
+Usage: transcribe <input.m4a> [output.docx|output.txt]
+
+If output file ends with .docx, creates a Word document with paragraphs.
+Otherwise creates a plain text file.
+Outputs the transcript to stdout as well.
+"""
+import argparse
+import os
+import subprocess
+import sys
+import time
+
+import numpy as np
+from faster_whisper import WhisperModel
+
+DEFAULT_MODEL = os.environ.get("AFT_MODEL", "base")  # tiny | base | small
+DEFAULT_LANG = os.environ.get("AFT_LANG", "en")
+
+SILENCE_THRESHOLD = "-40dB"
+SILENCE_SECONDS = 1.5
+MIN_AUTO_STOP = 1.0
+MAX_SECONDS = 180
+
+LOGFILE = os.path.expanduser("~/.cache/audio-file-transcriber/transcribe.log")
+
+
+def log(msg):
+    try:
+        os.makedirs(os.path.dirname(LOGFILE), exist_ok=True)
+        with open(LOGFILE, "a") as f:
+            f.write(f"{time.strftime('%H:%M:%S')} {msg}\n")
+            f.flush()
+    except OSError:
+        pass
+
+
+def decode_audio(path):
+    """Decode any audio file to a 16 kHz mono float32 array via ffmpeg."""
+    p = subprocess.run(
+        ["ffmpeg", "-hide_banner", "-loglevel", "error", "-i", path,
+         "-f", "s16le", "-ac", "1", "-ar", "16000", "-"],
+        stdout=subprocess.PIPE, check=True)
+    return np.frombuffer(p.stdout, dtype=np.int16).astype(np.float32) / 32768.0
+
+
+def transcribe(model_name, audio_path, lang):
+    model = WhisperModel(model_name, device="cpu", compute_type="int8",
+                        cpu_threads=os.cpu_count())
+    
+    audio = decode_audio(audio_path)
+    
+    segments, _ = model.transcribe(
+        audio,
+        language=lang if lang != "auto" else None,
+        vad_filter=True,
+        vad_parameters=dict(min_silence_duration_ms=400),
+        beam_size=1,
+        condition_on_previous_text=False
+    )
+    return "".join(s.text for s in segments).strip()
+
+
+def write_word_doc(text, path):
+    """Write text to a Word document with paragraph formatting."""
+    from docx import Document
+    from docx.shared import Pt
+    
+    doc = Document()
+    
+    # Split text into paragraphs based on sentence groups
+    # Use roughly 3-5 sentences per paragraph for readability
+    sentences = []
+    for sentence in text.split('. '):
+        sentence = sentence.strip()
+        if sentence:
+            sentences.append(sentence + ('.' if not sentence.endswith('.') else ''))
+    
+    # Group sentences into paragraphs (3-5 sentences each)
+    para_size = 4
+    paragraphs = []
+    for i in range(0, len(sentences), para_size):
+        para = '. '.join(sentences[i:i+para_size])
+        if para.strip():
+            paragraphs.append(para.strip())
+    
+    # Add each paragraph to the document
+    for para_text in paragraphs:
+        p = doc.add_paragraph(para_text)
+        for run in p.runs:
+            run.font.size = Pt(12)
+    
+    doc.save(path)
+
+
+def write_plain_text(text, path):
+    """Write text to a plain text file."""
+    with open(path, "w") as f:
+        f.write(text + "\n")
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Transcribe audio file locally")
+    ap.add_argument("input", help="Input audio file (m4a, wav, mp3, etc.)")
+    ap.add_argument("output", nargs="?", help="Output file (default: <input>.txt or <input>.docx)")
+    ap.add_argument("--model", default=DEFAULT_MODEL,
+                    help="tiny | base | small (default: %(default)s)")
+    ap.add_argument("--lang", default=DEFAULT_LANG,
+                    help="Language code, or 'auto' to detect (default: %(default)s)")
+    ap.add_argument("--format", choices=["txt", "docx", "auto"], default="auto",
+                    help="Output format (default: auto-detect from filename)")
+    args = ap.parse_args()
+    
+    if not os.path.exists(args.input):
+        print(f"ERROR: Input file not found: {args.input}", file=sys.stderr)
+        return 1
+    
+    log(f"Processing {args.input} with model={args.model} lang={args.lang}")
+    
+    t0 = time.time()
+    
+    try:
+        text = transcribe(args.model, args.input, args.lang)
+    except Exception as e:
+        log(f"ERROR: {e}")
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 1
+    
+    # Determine output path and format
+    if args.output:
+        out_path = args.output
+        fmt = args.format
+        if fmt == "auto":
+            fmt = "docx" if out_path.endswith(".docx") else "txt"
+    else:
+        base = os.path.splitext(args.input)[0]
+        out_path = base + ".docx"  # Default to docx
+        fmt = "docx"
+    
+    # Write transcript
+    try:
+        if fmt == "docx":
+            write_word_doc(text, out_path)
+        else:
+            write_plain_text(text, out_path)
+        log(f"Saved transcript to {out_path}")
+    except Exception as e:
+        log(f"ERROR writing output: {e}")
+        print(f"ERROR: Could not write output file: {e}", file=sys.stderr)
+        return 1
+    
+    # Output to stdout
+    print(text)
+    print(f"[{args.model}] {time.time()-t0:.1f}s", file=sys.stderr)
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())

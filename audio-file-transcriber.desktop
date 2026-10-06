@@ -1,0 +1,11 @@
+[Desktop Entry]
+Version=1.0
+Type=Application
+Name=Audio Transcriber
+Comment=Transcribe audio files to Word documents using local AI
+Exec=/usr/bin/python3 /home/bigzo/DEVELOPMENT/audio-file-transcriber/tray.py
+Icon=audio-transcriber-symbolic
+Terminal=false
+Categories=AudioVideo;Audio;Utility;
+StartupNotify=true
+Keywords=transcribe;speech;audio;m4a;doc;word;

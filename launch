@@ -1,0 +1,41 @@
+#!/bin/bash
+# Launcher for audio-file-transcriber
+# Usage: launcher <input.m4a>
+#   Default: creates Word document (.docx)
+#   Add --txt for plain text output
+# Or with a file picker: launcher --pick
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PYTHON="$SCRIPT_DIR/.venv/bin/python"
+TRANSPILE="$SCRIPT_DIR/transcribe"
+
+# Check for file picker mode
+if [ "$1" = "--pick" ]; then
+    INPUT=$(zenity --file-selection --file-filter="Audio files | *.m4a *.wav *.mp3 *.ogg *.flac" 2>/dev/null)
+    if [ -z "$INPUT" ]; then
+        exit 1
+    fi
+    OUTPUT="$2"
+elif [ "$1" = "--txt" ]; then
+    shift
+    if [ "$1" = "--pick" ]; then
+        INPUT=$(zenity --file-selection --file-filter="Audio files | *.m4a *.wav *.mp3 *.ogg *.flac" 2>/dev/null)
+        if [ -z "$INPUT" ]; then
+            exit 1
+        fi
+    else
+        INPUT="$1"
+    fi
+    OUTPUT="${INPUT%.*}.txt"
+else
+    INPUT="$1"
+    # Default to Word document output
+    OUTPUT="${INPUT%.*}.docx"
+fi
+
+if [ -z "$INPUT" ]; then
+    echo "Usage: launcher <audio-file> or launcher --txt for text output" >&2
+    exit 1
+fi
+
+exec "$PYTHON" "$TRANSPILE" "$INPUT" "$OUTPUT"
